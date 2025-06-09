@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 AI agent that autonomously searches for and downloads material from the internet.
 Can handle prompts like:
@@ -6,7 +5,8 @@ Can handle prompts like:
 - "Download 2 random wikipedia articles"
 - "Download the front page of https://news.ycombinator.com/"
 """
-
+import sys
+from os import getenv
 import json
 import time
 import mimetypes
@@ -52,16 +52,32 @@ class InternetSearchAgent:
             "action": "search_images" | "download_articles" | "download_webpage",
             "subject": "what to search for or download",
             "count": number_of_items,
-            "details": "any specific requirements"
+            "content_type": "wikipedia" | "news" | "webpage" | "images",
+            "source": "specific website or 'any'",
+            "topic": "specific topic or 'random'"
         }
 
         Examples:
-        - "Find X photos of Y" → {"action": "search_images", "subject": "Y",
-          "count": X, "details": "photographs"}
-        - "Download N articles" → {"action": "download_articles",
-          "subject": "random wikipedia", "count": N, "details": "articles"}
-        - "Download webpage URL" → {"action": "download_webpage",
-          "subject": "URL", "count": 1, "details": "webpage"}
+        - "Find photos" → {"action": "search_images", "subject": "Y", "count": X,
+          "content_type": "images", "source": "any", "topic": "Y"}
+        - "Download random articles" → {"action": "download_articles", "subject": "articles",
+          "count": N, "content_type": "articles", "source": "any", "topic": "random"}
+        - "Download wikipedia articles" → {"action": "download_articles", "subject": "articles",
+          "count": N, "content_type": "articles", "source": "wikipedia.org", "topic": "random"}
+        - "Download articles about TOPIC" → {"action": "download_articles", "subject": "articles",
+          "count": N, "content_type": "articles", "source": "any", "topic": "TOPIC"}
+        - "Download articles about TOPIC from SITE" → {"action": "download_articles", "subject": "articles",
+          "count": N, "content_type": "articles", "source": "SITE", "topic": "TOPIC"}
+        - "Download from SITE" → {"action": "download_articles", "subject": "articles",
+          "count": 1, "content_type": "news", "source": "SITE", "topic": "latest"}
+        - "Download webpage" → {"action": "download_webpage", "subject": "URL", "count": 1,
+          "content_type": "webpage", "source": "URL", "topic": "homepage"}
+
+        IMPORTANT: Extract the source website correctly!
+        - "wikipedia articles" → source: "wikipedia.org"
+        - "articles from BBC" → source: "bbc.com"
+        - "CNN news" → source: "cnn.com"
+        - If no specific source mentioned → source: "any"
 
         Return ONLY the JSON, no other text."""
 
@@ -130,79 +146,152 @@ class InternetSearchAgent:
         logger.info(f"✅ Downloaded {downloaded_count} images → {subject_dir}")
         return all_downloads
 
-    def download_articles(self, count: int) -> list[dict]:
-        """Download random Wikipedia articles."""
-        logger.info(f"📚 Downloading {count} Wikipedia articles...")
+    def download_content(self, count: int, topic: str = "random",
+                         source: str = "any", content_type: str = "articles",
+                         direct_url: str = None) -> list[dict]:
+        """Intelligently download content using search engine or direct URL."""
 
-        articles_dir = self.download_dir / "articles"
+        if direct_url:
+            # Direct URL download (for webpages)
+            logger.info(f"🌐 Downloading webpage: {direct_url}")
+            webpages_dir = self.download_dir / "webpages"
+            webpages_dir.mkdir(parents=True, exist_ok=True)
+
+            title = f"Webpage_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            metadata = self._download_single_webpage(direct_url, title, webpages_dir)
+            logger.info(f"✅ Downloaded webpage → {webpages_dir}")
+            return [metadata]
+
+        # Search-based download (for articles/news)
+        logger.info(f"📚 Downloading {count} {content_type} about '{topic}' from {source}...")
+
+        # Create directory
+        articles_dir = self.download_dir / "articles" / f"{source}_{topic}".replace(" ", "_")
         articles_dir.mkdir(parents=True, exist_ok=True)
 
+        # Construct smart search query using AI
+        search_queries = self._generate_content_queries(topic, source, content_type, count)
+        logger.debug(f"🔍 Generated queries: {search_queries}")
+
+        # Use SearXNG to find articles
         all_downloads = []
 
-        for i in range(count):
+        for i, search_query in enumerate(search_queries):
+            if len(all_downloads) >= count:
+                break
+
+            logger.debug(f"🔍 Search query {i+1}: {search_query}")
+
             try:
-                # Get random Wikipedia article
-                random_url = "https://en.wikipedia.org/api/rest_v1/page/random/summary"
-                response = self.session.get(random_url, timeout=10)
-                response.raise_for_status()
+                search_url = f"{self.searxng_url}/search"
 
-                article_info = response.json()
-                title = article_info['title']
-                page_url = article_info['content_urls']['desktop']['page']
+                # Choose appropriate SearXNG category
+                category = "news" if content_type == "news" else "general"
 
-                logger.info(f"📄 Article {i+1}: {title}")
-
-                # Download the article HTML
-                article_response = self.session.get(page_url, timeout=15)
-                article_response.raise_for_status()
-
-                # Save as HTML file
-                safe_title = re.sub(r'[^\w\-_.]', '_', title)
-                filename = f"{safe_title}.html"
-                filepath = articles_dir / filename
-                filepath.write_text(article_response.text, encoding='utf-8')
-
-                metadata = {
-                    'filename': filename,
-                    'filepath': str(filepath),
-                    'url': page_url,
-                    'title': title,
-                    'size_bytes': len(article_response.text.encode('utf-8')),
-                    'download_time': datetime.now().isoformat(),
-                    'status': 'success'
+                params = {
+                    'q': search_query,
+                    'categories': category,
+                    'format': 'json',
+                    'engines': 'google,bing,duckduckgo' if category == "general" else 'bing news,google news'
                 }
 
-                all_downloads.append(metadata)
-                logger.info(f"💾 {filename}")
+                response = self.session.get(search_url, params=params, timeout=10)
+                response.raise_for_status()
+
+                data = response.json()
+                results_count = len(data.get('results', []))
+                logger.debug(f"🔍 SearXNG returned {results_count} results for query {i+1}")
+
+                # Debug: show what we actually got
+                for j, result in enumerate(data.get('results', [])[:3]):  # Show first 3
+                    title_debug = result.get('title', 'No title')
+                    url_debug = result.get('url', 'No URL')
+                    logger.debug(f"  Result {j+1}: {title_debug} → {url_debug}")
+
+                for result in data.get('results', []):
+                    if len(all_downloads) >= count:
+                        break
+
+                    title = result.get('title', f'Article_{len(all_downloads)+1}')
+                    url = result.get('url')
+
+                    if url:
+                        logger.info(f"📄 Article {len(all_downloads)+1}: {title},   url: {url}")
+                        metadata = self._download_single_webpage(url, title, articles_dir)
+                        all_downloads.append(metadata)
+                        time.sleep(1)  # Be respectful
 
             except Exception as e:
-                logger.error(f"❌ Failed to download article {i+1}: {e}")
-                all_downloads.append({
-                    'error': str(e),
-                    'status': 'failed',
-                    'download_time': datetime.now().isoformat()
-                })
+                logger.error(f"❌ Failed search query {i+1}: {e}")
 
-        successful_count = len([d for d in all_downloads if d['status'] == 'success'])
+        successful_count = len([d for d in all_downloads if d.get('status') == 'success'])
         logger.info(f"✅ Downloaded {successful_count} articles → {articles_dir}")
         return all_downloads
 
-    def download_webpage(self, url: str) -> list[dict]:
-        """Download a specific webpage."""
-        logger.info(f"🌐 Downloading webpage: {url}")
+    def _generate_content_queries(self, topic: str, source: str, content_type: str, count: int) -> list[str]:
+        """Use AI to generate smart search queries for content."""
+        try:
+            if topic == "random":
+                # Don't search for "random" - generate actual diverse topics
+                system_prompt = f"""Generate {min(count, 3)} diverse topics to find interesting {content_type}.
 
-        webpages_dir = self.download_dir / "webpages"
-        webpages_dir.mkdir(parents=True, exist_ok=True)
+                Generate completely different subjects that would have good {content_type}.
+                DO NOT use the word "random" in any query.
 
+                Examples of good topics: history, science, technology, nature, culture, biography
+
+                If source is specified, add "site:{source}" to each query.
+                Source: {source if source != "any" else "not specified"}
+
+                Return EXACTLY a JSON array like: ["topic1", "topic2", .., "topic{count}"]
+                Return ONLY the JSON array."""
+            else:
+                # Specific topic search
+                system_prompt = f"""Generate {min(count, 3)} search queries to find {content_type} about: {topic}
+
+                If source is specified, add "site:{source}" to each query.
+                Source: {source if source != "any" else "not specified"}
+
+                Return EXACTLY a JSON array like: ["query1", "query2", .., "query{count}"]
+                Return ONLY the JSON array."""
+
+            response = self.client.chat.completions.create(
+                model="anthropic/claude-3-sonnet",
+                messages=[{"role": "user", "content": system_prompt}],
+                max_tokens=200,
+                temperature=0.3
+            )
+
+            content = response.choices[0].message.content.strip()
+            queries = json.loads(content)
+
+            if isinstance(queries, list):
+                return queries[:count]
+
+        except Exception as e:
+            logger.error(f"❌ Content query generation failed: {e}")
+
+        # Fallback: use actual topics, not "random"
+        if topic == "random":
+            topics = ["history", "science", "technology"]
+        else:
+            topics = [topic]
+
+        if source != "any":
+            return [f"{t} site:{source}" for t in topics]
+        else:
+            return [f"{t} {content_type}" for t in topics]
+
+    def _download_single_webpage(self, url: str, title: str, directory: Path) -> dict:
+        """Download a single webpage and return metadata."""
         try:
             response = self.session.get(url, timeout=15)
             response.raise_for_status()
 
-            # Generate filename from URL
-            parsed = urlparse(url)
-            domain = parsed.netloc.replace('www.', '')
-            filename = f"{domain}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-            filepath = webpages_dir / filename
+            # Clean filename
+            safe_title = re.sub(r'[^\w\-_.]', '_', title)
+            filename = f"{safe_title}.html"
+            filepath = directory / filename
 
             filepath.write_text(response.text, encoding='utf-8')
 
@@ -210,22 +299,24 @@ class InternetSearchAgent:
                 'filename': filename,
                 'filepath': str(filepath),
                 'url': url,
+                'title': title,
                 'size_bytes': len(response.text.encode('utf-8')),
                 'download_time': datetime.now().isoformat(),
                 'status': 'success'
             }
 
-            logger.info(f"✅ Downloaded webpage → {webpages_dir}")
-            return [metadata]
+            logger.info(f"💾 {filename}")
+            return metadata
 
         except Exception as e:
             logger.error(f"❌ Failed to download {url}: {e}")
-            return [{
+            return {
                 'url': url,
+                'title': title,
                 'error': str(e),
                 'status': 'failed',
                 'download_time': datetime.now().isoformat()
-            }]
+            }
 
     def _generate_search_queries(self, subject: str, count: int) -> list[str]:
         """Generate search queries for the subject."""
@@ -341,7 +432,7 @@ class InternetSearchAgent:
             return metadata
 
         except Exception as e:
-            logger.error(f"❌ Download failed {url}: {e}")
+            logger.exception(f"❌ Download failed {url}: {e}")
             return {
                 'url': url,
                 'error': str(e),
@@ -360,17 +451,27 @@ class InternetSearchAgent:
         if request_info['action'] == 'search_images':
             return self.search_images(request_info['subject'], request_info['count'])
         elif request_info['action'] == 'download_articles':
-            return self.download_articles(request_info['count'])
+            return self.download_content(
+                count=request_info['count'],
+                topic=request_info.get('topic', 'random'),
+                source=request_info.get('source', 'any'),
+                content_type=request_info.get('content_type', 'articles')
+            )
         elif request_info['action'] == 'download_webpage':
-            return self.download_webpage(request_info['subject'])
+            # Webpage download is just single-item content download
+            return self.download_content(
+                count=1,
+                topic=request_info.get('topic', 'homepage'),
+                source=request_info.get('source', 'any'),
+                content_type='webpage',
+                direct_url=request_info['subject']
+            )
         else:
             logger.error(f"❌ Unknown action: {request_info['action']}")
             return []
 
 
 def main():
-    import sys
-    from os import getenv
 
     api_key = getenv('OPENROUTER_API_KEY')
     if not api_key:
