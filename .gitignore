@@ -1,0 +1,14 @@
+.idea
+*/__pycache__
+/venv/
+__pycache__/
+.vscode
+.env
+.env.dev
+.env.prod
+.envrc
+.lazy.lua
+downloads
+.cursor
+.history
+searxng
