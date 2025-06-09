@@ -19,7 +19,7 @@ from openai import OpenAI
 from config import setup_logging
 
 
-logger = setup_logging()
+logger = setup_logging(__name__)
 
 
 class InternetSearchAgent:
@@ -269,18 +269,7 @@ class InternetSearchAgent:
                 return queries[:count]
 
         except Exception as e:
-            logger.error(f"❌ Content query generation failed: {e}")
-
-        # Fallback: use actual topics, not "random"
-        if topic == "random":
-            topics = ["history", "science", "technology"]
-        else:
-            topics = [topic]
-
-        if source != "any":
-            return [f"{t} site:{source}" for t in topics]
-        else:
-            return [f"{t} {content_type}" for t in topics]
+            logger.exception(f"❌ Content query generation failed: {e}")
 
     def _download_single_webpage(self, url: str, title: str, directory: Path) -> dict:
         """Download a single webpage and return metadata."""

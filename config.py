@@ -3,11 +3,11 @@ import colorlog
 
 
 # Configure colored logging
-def setup_logging():
+def setup_logging(name):
     """Set up colored logging for console and plain logging for file."""
 
     # Create logger
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
     # Remove any existing handlers
