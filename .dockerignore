@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.pytest_cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.venv
+
+# IDE
+.vscode
+.cursor
+.history
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Downloads and cache
+downloads/*
+test_downloads/*
+!downloads/.gitkeep
+!test_downloads/.gitkeep
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
