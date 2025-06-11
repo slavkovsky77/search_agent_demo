@@ -86,7 +86,7 @@ TEST_SCENARIOS = [
     TestScenario(
         name="business_news",
         request="Download latest business news",
-        expected_count=1,
+        expected_count=3,
         content_type="articles",
         expected_topic="business"
     ),
