@@ -3,6 +3,7 @@ Centralized prompt functions for the Internet Search Agent.
 All AI prompts are defined here for better maintainability and reusability.
 """
 from .models import SearchRequest
+from .config import SystemConstants, QueryLimits
 
 
 def get_request_understanding_prompt() -> str:
@@ -39,16 +40,18 @@ def get_request_understanding_prompt() -> str:
 
 def get_search_queries_prompt(subject: str, count: int) -> str:
     """Prompt for generating search queries."""
-    return f"""Generate {min(count, 5)} different search queries to find images of: {subject}
+    max_queries = min(count, QueryLimits.MAX_IMAGE_QUERIES)
+    return f"""Generate {max_queries} different search queries to find images of: {subject}
 
-    Return EXACTLY a JSON array like: ["query1", "query2", "query{count}"]
-    Each query should be 1-4 words, designed to find {subject}.
+    Return EXACTLY a JSON array like: ["query1", "query2", "query{max_queries}"]
+    Each query should be {QueryLimits.IMAGE_QUERY_WORDS_MIN}-{QueryLimits.IMAGE_QUERY_WORDS_MAX} words, designed to find {subject}.
     Return ONLY the JSON array."""
 
 
 def get_content_queries_prompt(topic: str, source: str, content_type: str, count: int) -> str:
     """Prompt for generating content search queries."""
-    return f"""Generate {min(count, 3)} search queries to find {content_type}.
+    max_queries = min(count, QueryLimits.MAX_CONTENT_QUERIES)
+    return f"""Generate {max_queries} search queries to find {content_type}.
 
     Topic: {topic}
     Source: {source}
@@ -67,7 +70,7 @@ def get_content_queries_prompt(topic: str, source: str, content_type: str, count
     - Topic "AI", Source "any" → ["artificial intelligence", "AI technology", "machine learning"]
     - Topic "AI", Source "cnn.com" → ["AI site:cnn.com", "artificial intelligence site:cnn.com"]
 
-    Return EXACTLY a JSON array of {min(count, 3)} search queries:
+    Return EXACTLY a JSON array of {max_queries} search queries:
     ["query1", "query2", "query3"]
 
     Return ONLY the JSON array."""
@@ -98,11 +101,12 @@ def get_article_scoring_prompt(candidates: list[str], search_request: SearchRequ
 
 def get_text_extraction_prompt(html_content: str) -> str:
     """Prompt for extracting article text from HTML."""
+    preview_content = html_content[:SystemConstants.HTML_PREVIEW_CHARS]
     return f"""Extract the main article content from this HTML, removing navigation, ads, scripts, and boilerplate.
     Return ONLY the readable article text, not JSON or explanations.
 
     HTML:
-    {html_content[:15000]}
+    {preview_content}
 
     Return only the clean article text:"""
 

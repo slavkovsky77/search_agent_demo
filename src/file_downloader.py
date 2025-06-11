@@ -10,8 +10,8 @@ import requests
 from PIL import Image
 from io import BytesIO
 
-from .models import DownloadResult, ImageSearchResult, SearchCandidate
-from .config import setup_logging
+from .models import DownloadResult, ImageSearchResult, SearchCandidate, DownloadStatus
+from .config import setup_logging, SystemConstants
 
 logger = setup_logging(__name__)
 
@@ -24,9 +24,15 @@ class FileDownloader:
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-                           '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            'User-Agent': SystemConstants.DEFAULT_USER_AGENT
         })
+
+    def download_from_candidate(self, candidate: SearchCandidate | ImageSearchResult) -> DownloadResult:
+        """Download from any candidate - unified entry point."""
+        if isinstance(candidate, ImageSearchResult):
+            return self.download_image(candidate, self.download_dir)
+        else:
+            return self.download_webpage(candidate, self.download_dir)
 
     def download_image(self, image_result: ImageSearchResult, directory: Path) -> DownloadResult:
         """Download and validate an image file."""
@@ -39,7 +45,10 @@ class FileDownloader:
         }
 
         try:
-            response = requests.get(str(image_result.url), timeout=30, headers=headers, stream=True)
+            response = requests.get(
+                str(image_result.url),
+                timeout=SystemConstants.IMAGE_DOWNLOAD_TIMEOUT,
+                headers=headers, stream=True)
             response.raise_for_status()
 
             content = response.content
@@ -69,11 +78,12 @@ class FileDownloader:
                 filename=filename,
                 filepath=filepath,
                 size_bytes=len(content),
-                status="success",
+                status=DownloadStatus.SUCCESS,
                 mime_type=response.headers.get('content-type'),
                 image_format=image_info['format'],
                 image_dimensions=image_info['dimensions'],
-                is_valid_image=True
+                is_valid_image=True,
+                title=getattr(image_result, 'title', 'Image')
             )
 
         except Exception as e:
@@ -85,7 +95,7 @@ class FileDownloader:
         logger.info(f"📄 Downloading webpage: {candidate.url}")
 
         try:
-            response = self.session.get(str(candidate.url), timeout=15)
+            response = self.session.get(str(candidate.url), timeout=SystemConstants.ARTICLE_DOWNLOAD_TIMEOUT)
             response.raise_for_status()
 
             # Generate clean filename from title
@@ -101,7 +111,7 @@ class FileDownloader:
                 filename=filename,
                 filepath=filepath,
                 size_bytes=len(response.text.encode('utf-8')),
-                status="success",
+                status=DownloadStatus.SUCCESS,
                 mime_type=response.headers.get('content-type'),
                 title=candidate.title
             )

@@ -20,7 +20,7 @@ from . import prompts
 from .search_engine import SearchEngine
 from .file_downloader import FileDownloader
 from .content_extractor import ContentExtractor
-from .config import setup_logging
+from .config import setup_logging, LLMModels, SystemConstants
 
 logger = setup_logging(__name__)
 
@@ -32,7 +32,7 @@ class InternetSearchAgent:
     - Download phase: download and validate files
     """
 
-    def __init__(self, openrouter_api_key: str, searxng_url: str = "http://localhost:8080"):
+    def __init__(self, openrouter_api_key: str, searxng_url: str = SystemConstants.DEFAULT_SEARXNG_URL):
         # Initialize OpenAI client
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
@@ -63,7 +63,6 @@ class InternetSearchAgent:
         # Phase 2: Search for candidates (or direct URL)
         if search_request.action == SearchAction.DOWNLOAD_WEBPAGE and search_request.subject.startswith("http"):
             # Direct URL download - create candidate from URL
-            from .models import SearchCandidate
             candidates = [SearchCandidate(
                 url=search_request.subject,
                 title=f"Direct download: {search_request.subject}",
@@ -90,13 +89,12 @@ class InternetSearchAgent:
 
         try:
             response = self.client.chat.completions.create(
-                model="anthropic/claude-3-sonnet",
+                model=LLMModels.REQUEST_UNDERSTANDING,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=200,
-                temperature=0.1
+                **LLMModels.REQUEST_PARAMS
             )
 
             content = response.choices[0].message.content.strip()
@@ -120,10 +118,12 @@ class InternetSearchAgent:
 
         for query in queries:
             if search_request.content_type == "images":
-                candidates = self.search_engine.search_images(query, max_candidates=20)
+                candidates = self.search_engine.search_images(
+                    query, max_candidates=SystemConstants.MAX_IMAGE_CANDIDATES)
             else:
                 # All non-image content types are treated as articles
-                candidates = self.search_engine.search_articles(query, max_candidates=30)
+                candidates = self.search_engine.search_articles(
+                    query, max_candidates=SystemConstants.MAX_ARTICLE_CANDIDATES)
 
             all_candidates.extend(candidates)
 
@@ -160,7 +160,7 @@ class InternetSearchAgent:
 
         # Smart multiplier calculation with conservative diminishing returns
         # 1→5x, 2→3x, 5→2x, 20→1.5x, 100→1.2x
-        smart_multiplier = 1 + (8 / (count + 1))
+        smart_multiplier = 1 + (SystemConstants.SMART_MULTIPLIER_FACTOR / (count + 1))
 
         desired_count = min(int(count * smart_multiplier), len(candidates))
 
@@ -283,7 +283,7 @@ def main():
     """Command line entry point."""
     parser = argparse.ArgumentParser(description='AI Internet Search Agent')
     parser.add_argument('prompt', nargs='*', help='Search prompt (e.g. "find 5 zebra photos")')
-    parser.add_argument('--searxng-url', default='http://localhost:8080',
+    parser.add_argument('--searxng-url', default=SystemConstants.DEFAULT_SEARXNG_URL,
                         help='SearXNG instance URL')
     args = parser.parse_args()
 
@@ -295,7 +295,7 @@ def main():
     # Create agent and execute request
     try:
         agent = InternetSearchAgent(api_key, args.searxng_url)
-        results = agent.execute_request(args.prompt)
+        results = agent.execute_request(' '.join(args.prompt))
 
         # Show summary
         successful = len([r for r in results if r.status == "success"])

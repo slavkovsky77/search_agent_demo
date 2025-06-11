@@ -12,7 +12,7 @@ from openai import OpenAI
 
 from .models import SearchRequest, SearchCandidate, ImageSearchResult, DownloadResult
 from . import prompts
-from .config import setup_logging
+from .config import setup_logging, LLMModels, SystemConstants
 from .content_extractor import ContentExtractor
 
 logger = setup_logging(__name__)
@@ -26,38 +26,46 @@ class SearchEngine:
         self.client = openai_client
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-                           '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            'User-Agent': SystemConstants.DEFAULT_USER_AGENT
         })
 
     def search_images(self, query: str, max_candidates: int = 20) -> list[ImageSearchResult]:
-        """Search for images and return validated candidates."""
-        logger.info(f"🔍 Searching images: '{query}' (up to {max_candidates} candidates)")
+        """Search for image candidates using SearXNG."""
+        logger.info(f"🖼️ Searching images: '{query}' (max {max_candidates})")
 
+        # Use image-specific engines
         search_url = f"{self.searxng_url}/search"
         params = {
-            'q': f"{query} photograph",
-            'categories': 'images',
+            'q': query,
             'format': 'json',
-            'engines': 'bing images,google images,duckduckgo images'
+            'engines': 'bing_images,google_images',
+            'categories': 'images'
         }
 
         try:
-            response = self.session.get(search_url, params=params, timeout=10)
+            response = self.session.get(search_url, params=params, timeout=SystemConstants.SEARCH_REQUEST_TIMEOUT)
             response.raise_for_status()
-            data = response.json()
+            search_results = response.json()
 
             candidates = []
-            for result in data.get('results', [])[:max_candidates]:
-                if 'img_src' in result and self._is_valid_image_url(result['img_src']):
+            for result in search_results.get('results', [])[:max_candidates]:
+                try:
+                    # Skip results without proper image URLs
+                    if not self._is_valid_image_url(result.get('url', '')):
+                        continue
+
                     candidates.append(ImageSearchResult(
                         url=result['img_src'],
                         title=result.get('title'),
                         thumbnail_url=result.get('thumbnail_src'),
-                        source_site=self._extract_domain(result['img_src'])
-                    ))
+                        source_site=urlparse(result['img_src']).netloc)
+                    )
 
-            logger.info(f"🎯 Found {len(candidates)} valid image candidates")
+                except Exception as e:
+                    logger.debug(f"⚠️ Skipped invalid image result: {e}")
+                    continue
+
+            logger.info(f"✅ Found {len(candidates)} image candidates")
             return candidates
 
         except Exception as e:
@@ -143,7 +151,7 @@ class SearchEngine:
             else:
                 logger.info(f"{emoji} Searching {category} category for {query}")
 
-            response = self.session.get(search_url, params=params, timeout=10)
+            response = self.session.get(search_url, params=params, timeout=SystemConstants.SEARCH_REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
 
@@ -162,7 +170,7 @@ class SearchEngine:
             return candidates
 
         except Exception as e:
-            logger.warning(f"⚠️ {category.title()} search failed for '{query}': {e}")
+            logger.error(f"❌ Article search failed: {e}")
             return []
 
     def generate_search_queries(self, search_request: SearchRequest) -> list[str]:
@@ -178,10 +186,9 @@ class SearchEngine:
 
         try:
             response = self.client.chat.completions.create(
-                model="anthropic/claude-3-sonnet",
+                model=LLMModels.QUERY_GENERATION,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.3
+                **LLMModels.QUERY_PARAMS
             )
 
             queries = json.loads(response.choices[0].message.content.strip())
@@ -216,26 +223,17 @@ class SearchEngine:
 
         return has_image_ext or has_image_keywords
 
-    def _extract_domain(self, url: str) -> str:
-        """Extract domain from URL."""
-        try:
-            parsed = urlparse(url)
-            return parsed.netloc
-        except Exception:
-            return "unknown"
-
     def score_and_select_candidates(self, candidates: list[SearchCandidate | ImageSearchResult],
                                     search_request: SearchRequest,
                                     desired_count: int) -> list[SearchCandidate]:
-        """Score candidates using AI and select the best ones (batch scoring with descriptions)."""
-        if len(candidates) <= desired_count:
-            return candidates
+        """Score candidates using AI and return top candidates."""
+        logger.info(f"🧠 Scoring {len(candidates)} candidates to select top {desired_count}")
 
-        logger.info(f"🎯 Scoring {len(candidates)} candidates to select best {desired_count}")
+        if not candidates:
+            return []
 
-        # For large numbers of candidates, batch them to avoid AI response truncation
-        batch_size = 16  # Process candidates in batches of 30
         scored_candidates = []
+        batch_size = SystemConstants.SCORING_BATCH_SIZE  # Process candidates in batches
 
         for i in range(0, len(candidates), batch_size):
             batch = candidates[i:i + batch_size]
@@ -254,10 +252,9 @@ class SearchEngine:
                 prompt = prompts.get_article_scoring_prompt(candidate_descriptions, search_request)
 
                 response = self.client.chat.completions.create(
-                    model="anthropic/claude-3-sonnet",
+                    model=LLMModels.CONTENT_SCORING,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=500,  # Increased for larger batches
-                    temperature=0.1
+                    **LLMModels.SCORING_PARAMS
                 )
 
                 response_content = response.choices[0].message.content.strip()
@@ -283,47 +280,46 @@ class SearchEngine:
                 scored_candidates.extend(batch)
 
             except Exception as e:
-                logger.exception(f"❌ Batch {batch_num} scoring failed: {e}")
-                # Assign default scores to this batch
+                logger.exception(f"❌ Scoring failed for batch {batch_num}: {e}")
+                # Assign low scores to failed batch
                 for candidate in batch:
-                    candidate.score = 0.5  # Neutral score
+                    candidate.score = 0.0
                 scored_candidates.extend(batch)
 
         # Sort by score and return top candidates
-        top_candidates = sorted(scored_candidates, key=lambda x: x.score, reverse=True)[:desired_count]
+        scored_candidates.sort(key=lambda x: x.score, reverse=True)
+        selected = scored_candidates[:desired_count]
 
-        logger.info(
-            f"✅ Selected {len(top_candidates)} top candidates "
-            f"(scores: {[f'{c.score:.2f}' for c in top_candidates]})"
-        )
-        return top_candidates
+        logger.info(f"✅ Selected top {len(selected)} candidates (scores: {[f'{c.score:.2f}' for c in selected[:5]]})")
+        return selected
 
     def _score_single_image(self, download_result: DownloadResult, subject: str) -> float:
-        """Score single image with vision API (resized to 480p max)."""
+        """Score single image with vision API (resized to max 480p)."""
+        logger.debug(f"🔍 Scoring image: {download_result.title}")
 
         try:
             # Download image
-            response = requests.get(str(download_result.url), timeout=10, headers={
-                'User-Agent': 'Mozilla/5.0 (compatible; SearchBot/1.0)'
+            response = requests.get(str(download_result.url), timeout=SystemConstants.SEARCH_REQUEST_TIMEOUT, headers={
+                'User-Agent': SystemConstants.DEFAULT_USER_AGENT
             })
             response.raise_for_status()
 
             # Resize to max 480p to save API costs
             image = Image.open(BytesIO(response.content))
-            if max(image.size) > 480:
-                ratio = 480 / max(image.size)
+            if max(image.size) > SystemConstants.MAX_IMAGE_DIMENSION:
+                ratio = SystemConstants.MAX_IMAGE_DIMENSION / max(image.size)
                 new_size = (int(image.width * ratio), int(image.height * ratio))
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
 
             # Convert to bytes
             img_buffer = BytesIO()
-            image.save(img_buffer, format='JPEG', quality=85)
+            image.save(img_buffer, format='JPEG', quality=SystemConstants.IMAGE_QUALITY)
             image_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
 
             # Score with vision using prompts
             vision_prompt = prompts.get_image_scoring_prompt(subject)
             response = self.client.chat.completions.create(
-                model="anthropic/claude-3-sonnet",
+                model=LLMModels.IMAGE_SCORING,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -331,8 +327,7 @@ class SearchEngine:
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
                     ]
                 }],
-                max_tokens=100,
-                temperature=0.1
+                **LLMModels.IMAGE_SCORING_PARAMS
             )
 
             result = json.loads(response.choices[0].message.content.strip())
@@ -352,7 +347,7 @@ class SearchEngine:
             html_content = download_result.filepath.read_text(encoding='utf-8')
             extracted_text = extractor.extract_article_text(html_content)
 
-            if not extracted_text or len(extracted_text.strip()) < 200:
+            if not extracted_text or len(extracted_text.strip()) < SystemConstants.MIN_ARTICLE_CONTENT_LENGTH:
                 logger.warning(f"❌ Poor content extraction from {download_result.title[:50]}... (JS-heavy site?)")
                 return 0.0
 
@@ -364,10 +359,9 @@ class SearchEngine:
             prompt = prompts.get_article_scoring_prompt(candidate_descriptions, search_request)
 
             response = self.client.chat.completions.create(
-                model="anthropic/claude-3-sonnet",
+                model=LLMModels.CONTENT_SCORING,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=100,
-                temperature=0.1
+                **LLMModels.SCORING_PARAMS
             )
 
             scores = json.loads(response.choices[0].message.content.strip())

@@ -6,7 +6,7 @@ from pathlib import Path
 import trafilatura
 
 from . import prompts
-from .config import setup_logging
+from .config import setup_logging, LLMModels, SystemConstants
 
 logger = setup_logging(__name__)
 
@@ -17,7 +17,7 @@ class ContentExtractor:
     def __init__(self, openai_client: OpenAI | None = None):
         self.client = openai_client
 
-    def extract_article_text(self, html_content: str, max_chars: int = 5000) -> str:
+    def extract_article_text(self, html_content: str, max_chars: int = SystemConstants.DEFAULT_MAX_TEXT_CHARS) -> str:
         """Extract main article text from HTML using smart extraction."""
         # Try trafilatura first (purpose-built for article extraction)
         try:
@@ -27,7 +27,7 @@ class ContentExtractor:
                 include_tables=False
             )
 
-            if extracted and len(extracted.strip()) > 100:
+            if extracted and len(extracted.strip()) > SystemConstants.MIN_EXTRACTED_TEXT_LENGTH:
                 logger.debug(f"🔍 Trafilatura extracted {len(extracted)} chars of clean content")
                 return extracted[:max_chars]
 
@@ -60,16 +60,15 @@ class ContentExtractor:
         prompt = prompts.get_text_extraction_prompt(html_content)
 
         response = self.client.chat.completions.create(
-            model="anthropic/claude-3-haiku",  # Faster/cheaper model for extraction
+            model=LLMModels.CONTENT_EXTRACTION,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000,
-            temperature=0.1
+            **LLMModels.EXTRACTION_PARAMS
         )
 
         extracted_text = response.choices[0].message.content.strip()
         logger.debug(f"🤖 LLM extracted {len(extracted_text)} chars of content")
 
-        if len(extracted_text) > 100:
+        if len(extracted_text) > SystemConstants.MIN_EXTRACTED_TEXT_LENGTH:
             return extracted_text[:max_chars]
         else:
             raise Exception("LLM extraction returned insufficient content")
