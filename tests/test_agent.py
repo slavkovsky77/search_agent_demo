@@ -31,6 +31,7 @@ def agent() -> InternetSearchAgent:
 def test_downloads_dir(scope="session") -> Path:
     """Create test download directory organized by scenario."""
     test_dir = Path("test_downloads")
+    # shutil.rmtree(test_dir, ignore_errors=True)
     test_dir.mkdir(exist_ok=True)
     return test_dir
 

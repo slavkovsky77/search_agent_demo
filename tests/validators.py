@@ -89,18 +89,35 @@ class ContentValidator:
 
         logger.info(f"🔍 Validating article {item_num}/{scenario.expected_count}: {result.filepath.name}")
 
-        content = result.filepath.read_text(encoding='utf-8')
+        # Check if extracted .txt file exists, use that instead of HTML
+        txt_filepath = result.filepath.with_suffix('.txt')
 
-        # Choose validation type
+        # Also check in candidates/ subdirectory if file was moved there
+        if not txt_filepath.exists():
+            candidates_txt_path = result.filepath.parent / "candidates" / txt_filepath.name
+            if candidates_txt_path.exists():
+                txt_filepath = candidates_txt_path
+
+        if txt_filepath.exists():
+            extracted_text = txt_filepath.read_text(encoding='utf-8')
+            logger.info(f"📄 Using extracted text from {txt_filepath.name}")
+        else:
+            # Fallback to HTML if no .txt file
+            logger.info(f"📄 No .txt file found, extracting from HTML: {result.filepath.name}")
+            html_content = result.filepath.read_text(encoding='utf-8')
+            extracted_text = self.content_extractor.extract_article_text(html_content, max_chars=5000)
+
+        # Choose validation type using extracted text
         if scenario.expected_source and scenario.expected_topic:
-            validation = self._validate_source_and_topic(content, scenario.expected_source, scenario.expected_topic)
+            validation = self._validate_source_and_topic_with_text(
+                extracted_text, scenario.expected_source, scenario.expected_topic)
         elif scenario.expected_topic:
-            validation = self._validate_topic_only(content, scenario.expected_topic)
+            validation = self._validate_topic_only_with_text(extracted_text, scenario.expected_topic)
         elif scenario.expected_source:
-            validation = self._validate_source_only(content, scenario.expected_source)
+            validation = self._validate_source_only_with_text(extracted_text, scenario.expected_source)
         else:
             # Basic validation for random articles - ensure we got real content
-            validation = self._validate_basic_article_content(content)
+            validation = self._validate_basic_article_content_with_text(extracted_text)
 
         logger.info(f"📝 Content validation: {validation}")
         is_valid = validation.get('relevant', False)
@@ -176,9 +193,9 @@ class ContentValidator:
             logger.warning(f"❌ Vision validation failed for {filepath.name}: {e}")
             return {"relevant": False, "confidence": 0.0, "reason": f"Vision validation failed: {e}"}
 
-    def _validate_source_and_topic(self, content: str, source: str, topic: str) -> dict:
-        """Validate both source and topic."""
-        text_snippet = self.content_extractor.extract_article_text(content, max_chars=5000)
+    def _validate_source_and_topic_with_text(self, extracted_text: str, source: str, topic: str) -> dict:
+        """Validate both source and topic using extracted text."""
+        text_snippet = extracted_text[:5000] if len(extracted_text) > 5000 else extracted_text
 
         validation_prompt = f"""
         Content snippet: {text_snippet}
@@ -198,9 +215,9 @@ class ContentValidator:
 
         return self._get_llm_validation(validation_prompt)
 
-    def _validate_topic_only(self, content: str, topic: str) -> dict:
-        """Validate topic relevance only."""
-        text_snippet = self.content_extractor.extract_article_text(content, max_chars=5000)
+    def _validate_topic_only_with_text(self, extracted_text: str, topic: str) -> dict:
+        """Validate topic relevance using extracted text."""
+        text_snippet = extracted_text[:5000] if len(extracted_text) > 5000 else extracted_text
 
         validation_prompt = f"""
         Content snippet: {text_snippet}
@@ -217,9 +234,9 @@ class ContentValidator:
 
         return self._get_llm_validation(validation_prompt)
 
-    def _validate_source_only(self, content: str, source: str) -> dict:
-        """Validate source only."""
-        text_snippet = self.content_extractor.extract_article_text(content, max_chars=5000)
+    def _validate_source_only_with_text(self, extracted_text: str, source: str) -> dict:
+        """Validate source using extracted text."""
+        text_snippet = extracted_text[:5000] if len(extracted_text) > 5000 else extracted_text
 
         validation_prompt = f"""
         Content snippet: {text_snippet}
@@ -236,9 +253,9 @@ class ContentValidator:
 
         return self._get_llm_validation(validation_prompt)
 
-    def _validate_basic_article_content(self, content: str) -> dict:
-        """Basic validation for random articles - ensure we got real content."""
-        text_snippet = self.content_extractor.extract_article_text(content, max_chars=3000)
+    def _validate_basic_article_content_with_text(self, extracted_text: str) -> dict:
+        """Basic validation using extracted text - ensure we got real content."""
+        text_snippet = extracted_text[:3000] if len(extracted_text) > 3000 else extracted_text
 
         validation_prompt = f"""
         Content snippet: {text_snippet}
@@ -260,6 +277,27 @@ class ContentValidator:
 
         return self._get_llm_validation(validation_prompt)
 
+    # Keep old methods for backward compatibility
+    def _validate_source_and_topic(self, content: str, source: str, topic: str) -> dict:
+        """Validate both source and topic."""
+        text_snippet = self.content_extractor.extract_article_text(content, max_chars=5000)
+        return self._validate_source_and_topic_with_text(text_snippet, source, topic)
+
+    def _validate_topic_only(self, content: str, topic: str) -> dict:
+        """Validate topic relevance only."""
+        text_snippet = self.content_extractor.extract_article_text(content, max_chars=5000)
+        return self._validate_topic_only_with_text(text_snippet, topic)
+
+    def _validate_source_only(self, content: str, source: str) -> dict:
+        """Validate source only."""
+        text_snippet = self.content_extractor.extract_article_text(content, max_chars=5000)
+        return self._validate_source_only_with_text(text_snippet, source)
+
+    def _validate_basic_article_content(self, content: str) -> dict:
+        """Basic validation for random articles - ensure we got real content."""
+        text_snippet = self.content_extractor.extract_article_text(content, max_chars=3000)
+        return self._validate_basic_article_content_with_text(text_snippet)
+
     def _get_llm_validation(self, prompt: str) -> dict:
         """Get validation response from LLM."""
         try:
@@ -273,6 +311,13 @@ class ContentValidator:
 
             content = response.choices[0].message.content.strip()
             logger.debug(f"🤖 Raw LLM validation response: {content}")
+
+            # Strip markdown code blocks if present
+            if content.startswith('```json'):
+                content = content[7:]  # Remove ```json
+            if content.endswith('```'):
+                content = content[:-3]  # Remove ```
+            content = content.strip()
 
             result = json.loads(content)
             logger.info(f"🔍 Parsed validation result: {result}")

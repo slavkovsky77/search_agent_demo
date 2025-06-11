@@ -8,7 +8,6 @@ class ContentType(str, Enum):
     """Content types for search requests."""
     IMAGES = "images"
     ARTICLES = "articles"
-    NEWS = "news"
     WEBPAGE = "webpage"
 
 
@@ -55,8 +54,12 @@ class DownloadResult(BaseModel):
     error_message: str | None = None
     mime_type: str | None = None
 
+    # Search relevance score (0.0-1.0)
+    relevance_score: float | None = None
+
     # Article-specific fields
     title: str | None = None
+    search_description: str | None = None  # Original search snippet from SearXNG
     extracted_text: str | None = None
 
     # Image-specific fields

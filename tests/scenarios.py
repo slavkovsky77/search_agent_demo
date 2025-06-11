@@ -89,5 +89,12 @@ TEST_SCENARIOS = [
         expected_count=1,
         content_type="articles",
         expected_topic="business"
+    ),
+    TestScenario(
+        name="hackernews_frontpage",
+        request="Download the front page of https://news.ycombinator.com/",
+        expected_count=1,
+        content_type="webpage",
+        url_validation="news.ycombinator.com"
     )
 ]

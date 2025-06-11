@@ -14,7 +14,7 @@ def get_request_understanding_prompt() -> str:
         "action": "search_images" | "download_articles" | "download_webpage",
         "subject": "what to search for or download",
         "count": number_of_items,
-        "content_type": "images" | "articles" | "news" | "webpage",
+        "content_type": "images" | "articles" | "webpage",
         "source": "specific website or 'any'",
         "topic": "specific topic or 'random'"
     }
@@ -26,6 +26,8 @@ def get_request_understanding_prompt() -> str:
       "count": N, "content_type": "articles", "source": "any", "topic": "random"}
     - "Download wikipedia articles" → {"action": "download_articles", "subject": "articles",
       "count": N, "content_type": "articles", "source": "wikipedia.org", "topic": "random"}
+    - "Download https://example.com" → {"action": "download_webpage", "subject": "https://example.com",
+      "count": 1, "content_type": "webpage", "source": "example.com", "topic": "webpage"}
 
     IMPORTANT: Extract the source website correctly!
     - "wikipedia articles" → source: "wikipedia.org"
@@ -76,7 +78,7 @@ def get_candidate_scoring_prompt(candidates: list[str], search_request: SearchRe
     ])
 
     return f"""Score these search results for relevance to: "{search_request.subject}"
-    Target: {search_request.count} {search_request.content_type} about "{search_request.topic}"
+    Target: {search_request.count} {search_request.content_type.value} about "{search_request.topic}"
     Source: {search_request.source}
 
     Candidates:
@@ -101,3 +103,17 @@ def get_text_extraction_prompt(html_content: str) -> str:
     {html_content[:15000]}
 
     Return only the clean article text:"""
+
+
+def get_image_scoring_prompt(subject: str) -> str:
+    """Prompt for scoring images with vision LLM."""
+    return f"""Look at this image and rate how well it shows {subject}.
+
+    Rate the image based on:
+    - Clarity and quality
+    - Relevance to {subject}
+    - Visual appeal
+    - Whether it actually shows {subject}
+
+    Return ONLY a JSON with a score 0.0-1.0:
+    {{"score": 0.85, "reason": "clear photo of {subject}"}}"""
