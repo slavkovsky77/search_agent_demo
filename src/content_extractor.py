@@ -2,6 +2,7 @@
 Content extraction from HTML articles using trafilatura and LLM fallback.
 """
 from openai import OpenAI
+from pathlib import Path
 import trafilatura
 
 from . import prompts
@@ -41,7 +42,18 @@ class ContentExtractor:
                 logger.exception(f"❌ LLM extraction failed: {e}")
 
         # Last resort: basic regex cleanup
-        return self._extract_basic_text(html_content, max_chars)
+        return None
+
+    def save_extracted_text(self, extracted_text: str, html_filepath: Path) -> bool:
+        """Save extracted text as .txt file alongside the HTML file."""
+        try:
+            txt_filepath = html_filepath.with_suffix('.txt')
+            txt_filepath.write_text(extracted_text, encoding='utf-8')
+            logger.debug(f"✅ Saved {len(extracted_text)} chars to {txt_filepath.name}")
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save text for {html_filepath.name}: {e}")
+            return False
 
     def _extract_with_llm(self, html_content: str, max_chars: int) -> str:
         """Use LLM to extract main article content from HTML."""
@@ -61,20 +73,3 @@ class ContentExtractor:
             return extracted_text[:max_chars]
         else:
             raise Exception("LLM extraction returned insufficient content")
-
-    def _extract_basic_text(self, html_content: str, max_chars: int) -> str:
-        """Basic text extraction as last resort."""
-        import re
-
-        # Remove script and style elements
-        html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL)
-        html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL)
-
-        # Remove HTML tags
-        text = re.sub(r'<[^>]+>', ' ', html_content)
-
-        # Clean up whitespace
-        text = ' '.join(text.split())
-
-        logger.debug(f"📝 Basic extraction got {len(text)} chars")
-        return text[:max_chars]

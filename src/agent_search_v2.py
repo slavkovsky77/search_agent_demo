@@ -6,8 +6,8 @@ import argparse
 import json
 from os import getenv
 from pathlib import Path
-import tempfile
 from openai import OpenAI
+import shutil
 
 from .models import (
     SearchRequest,
@@ -155,101 +155,84 @@ class InternetSearchAgent:
 
     def _select_candidates_for_download(self, candidates: list,
                                         search_request: SearchRequest) -> list:
-        """Select which candidates to download."""
+        """Select which candidates to download using smart diminishing returns."""
+        count = search_request.count
+
+        # Smart multiplier calculation with conservative diminishing returns
+        # 1→5x, 2→3x, 5→2x, 20→1.5x, 100→1.2x
+        smart_multiplier = 1 + (8 / (count + 1))
+
+        desired_count = min(int(count * smart_multiplier), len(candidates))
+
+        logger.info(f"🧮 Smart selection: {count} requested → checking {desired_count} "
+                    f"candidates ({smart_multiplier:.1f}x)")
+
         if search_request.content_type != ContentType.IMAGES:
-            # Articles: use batch scoring to pre-select
-            desired_count = min(search_request.count * 3, len(candidates))
             return self.search_engine.score_and_select_candidates(
                 candidates, search_request, desired_count)
         else:
-            # Images: take reasonable number
-            return candidates[:min(search_request.count * 2, len(candidates))]
+            return candidates[:desired_count]
 
     def _download_candidates(
-            self, candidates: list, directory: Path, search_request: SearchRequest) -> list[DownloadResult]:
+            self,
+            candidates: list[SearchCandidate | ImageSearchResult],
+            directory: Path,
+            search_request: SearchRequest) -> list[DownloadResult]:
         """Download all candidates and extract content."""
         results = []
-        temp_dir = Path(tempfile.mkdtemp(prefix="scoring_"))
-
-        try:
-            for i, candidate in enumerate(candidates):
-                logger.info(f"📥 {i+1}/{len(candidates)}: {candidate.title[:50]}...")
-
-                # Download
-                if search_request.content_type == ContentType.IMAGES:
-                    result = self.downloader.download_image(candidate, directory)
-                else:
-                    result = self.downloader.download_webpage(candidate, directory)
-                    self._extract_and_save_text(result)
-
-                # Score
-                self._score_result(result, candidate, search_request, temp_dir)
-                results.append(result)
-
-        finally:
-            pass  # Clean up temp_dir if needed
-
-        return results
-
-    def _extract_and_save_text(self, result: DownloadResult) -> None:
-        """Extract text from HTML and save as .txt file."""
-        if result.status == "success" and result.filepath.exists():
-            html_content = result.filepath.read_text(encoding='utf-8')
-            extracted_text = self.content_extractor.extract_article_text(html_content)
-            result.extracted_text = extracted_text
-
-            if extracted_text:
-                txt_filepath = result.filepath.with_suffix('.txt')
-                txt_filepath.write_text(extracted_text, encoding='utf-8')
-
-    def _score_result(self, result: DownloadResult, candidate, search_request: SearchRequest, temp_dir: Path) -> None:
-        """Set relevance score and metadata for result."""
-        if result.status == "success":
-            if search_request.content_type == ContentType.IMAGES:
-                result.relevance_score = self.search_engine.score_candidate(
-                    candidate, search_request.content_type, search_request, temp_dir)
-            else:
-                result.relevance_score = getattr(candidate, 'score', 0.0)
-        else:
-            result.relevance_score = 0.0
-
-        # Add metadata
-        result.search_description = getattr(candidate, 'description', None)
-        if hasattr(candidate, 'title') and candidate.title and not result.title:
-            result.title = candidate.title
-
-    def _select_best_results(self, results: list[DownloadResult], count: int, directory: Path) -> list[DownloadResult]:
-        """Select best results and move unselected to candidates folder."""
-        successful = [r for r in results if r.status == "success"]
-        successful.sort(key=lambda x: x.relevance_score or 0.0, reverse=True)
-        selected = successful[:count]
-        unselected = successful[count:]
-
-        if unselected:
-            self._move_unselected_files(unselected, directory)
-
-        return selected
-
-    def _move_unselected_files(self, unselected: list[DownloadResult], directory: Path) -> None:
-        """Move unselected files to candidates subfolder."""
+        # Download all candidates into candidates/ subfolder first
         candidates_dir = directory / "candidates"
         candidates_dir.mkdir(exist_ok=True)
 
-        for result in unselected:
+        for i, candidate in enumerate(candidates):
+            logger.info(f"📥 {i+1}/{len(candidates)}: {candidate.title[:50]}...")
+
+            # Download into candidates/ folder
+            if search_request.content_type == ContentType.IMAGES:
+                result = self.downloader.download_image(candidate, candidates_dir)
+                if result:
+                    result.relevance_score = self.search_engine._score_single_image(result, search_request.subject)
+            else:
+                result = self.downloader.download_webpage(candidate, candidates_dir)
+                if result:
+                    relevance_score = self.search_engine._score_single_article(result, search_request)
+                    result.search_description = candidate.description
+                    result.title = candidate.title
+                    result.relevance_score = relevance_score
+
+            if not result:
+                logger.warning(f"❌ Failed to download and score {candidate.title[:50]}...")
+                continue
+
+            results.append(result)
+
+        return results
+
+    def _select_best_results(self, results: list[DownloadResult], count: int, directory: Path) -> list[DownloadResult]:
+        """Select best results and move them to main folder."""
+        results.sort(key=lambda x: x.relevance_score or 0.0, reverse=True)
+        selected = results[:count]
+
+        # Move selected files from candidates/ to main folder
+        for result in selected:
             try:
                 if result.filepath.exists():
-                    # Move HTML
-                    new_html_path = candidates_dir / result.filepath.name
-                    result.filepath.rename(new_html_path)
+                    # Move HTML to main folder
+                    new_html_path = directory / result.filepath.name
+                    shutil.move(str(result.filepath), str(new_html_path))
 
-                    # Move .txt if exists
-                    txt_path = result.filepath.with_suffix('.txt')
-                    if txt_path.exists():
-                        new_txt_path = candidates_dir / txt_path.name
-                        txt_path.rename(new_txt_path)
+                    # Move .txt if exists (calculate path before updating result.filepath)
+                    old_txt_path = result.filepath.with_suffix('.txt')
+                    if old_txt_path.exists():
+                        new_txt_path = directory / old_txt_path.name
+                        shutil.move(str(old_txt_path), str(new_txt_path))
+
+                    result.filepath = new_html_path  # Update filepath after moving
 
             except Exception as e:
-                logger.warning(f"⚠️ Failed to move {result.filepath}: {e}")
+                logger.warning(f"⚠️ Failed to move selected file: {e}")
+
+        return selected
 
     def _save_results_log(self, results: list[DownloadResult]) -> None:
         """Save results to JSON log file."""

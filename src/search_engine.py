@@ -9,12 +9,10 @@ from io import BytesIO
 
 from urllib.parse import urlparse
 from openai import OpenAI
-from pathlib import Path
 
-from .models import SearchRequest, SearchCandidate, ImageSearchResult
+from .models import SearchRequest, SearchCandidate, ImageSearchResult, DownloadResult
 from . import prompts
 from .config import setup_logging
-from .file_downloader import FileDownloader
 from .content_extractor import ContentExtractor
 
 logger = setup_logging(__name__)
@@ -67,17 +65,71 @@ class SearchEngine:
             return []
 
     def search_articles(self, query: str, max_candidates: int = 30) -> list[SearchCandidate]:
-        """Search for articles and return candidates."""
+        """Search for articles and return candidates from both news and general categories."""
         logger.info(
             f"🔍 Searching articles: '{query}' "
             f"(up to {max_candidates} candidates)"
         )
 
-        search_url = f"{self.searxng_url}/search"
-        # Always use 'news' category for articles - it finds actual articles, not homepages
-        category = "news"
-        engines = 'bing news,google news'
+        all_candidates = []
+        site_constraint = self._extract_site_constraint(query)
 
+        # Search news category first
+        news_candidates = self._search_category(query, 'news', 'bing news,google news', "📰")
+        all_candidates.extend(news_candidates)
+        logger.info(f"📰 Found {len(news_candidates)} news candidates")
+
+        # Search general category
+        if len(all_candidates) < max_candidates:
+            remaining_needed = max_candidates - len(all_candidates)
+            existing_urls = {candidate.url for candidate in all_candidates}
+
+            general_candidates = self._search_category(
+                query, 'general', 'google,bing,duckduckgo', "🎯",
+                exclude_urls=existing_urls, max_results=remaining_needed
+            )
+            all_candidates.extend(general_candidates)
+            logger.info(f"🎯 Found {len(general_candidates)} additional general candidates")
+
+        # Filter by site constraint if present
+        if site_constraint:
+            all_candidates = self._filter_by_site_constraint(all_candidates, site_constraint)
+
+        # Limit to max_candidates
+        final_candidates = all_candidates[:max_candidates]
+        logger.info(f"✅ Total found {len(final_candidates)} article candidates")
+        return final_candidates
+
+    def _extract_site_constraint(self, query: str) -> str | None:
+        """Extract site constraint from search query (e.g., 'site:wikipedia.org' -> 'wikipedia.org')."""
+        if 'site:' not in query.lower():
+            return None
+
+        import re
+        match = re.search(r'site:([^\s]+)', query.lower())
+        if match:
+            site_constraint = match.group(1)
+            logger.info(f"🎯 Site constraint detected: {site_constraint}")
+            return site_constraint
+        return None
+
+    def _filter_by_site_constraint(self, candidates: list[SearchCandidate],
+                                   site_constraint: str) -> list[SearchCandidate]:
+        """Filter candidates to only include URLs matching the site constraint."""
+        filtered_candidates = [
+            candidate for candidate in candidates
+            if site_constraint in str(candidate.url).lower()
+        ]
+        logger.info(f"🔍 Filtered to {len(filtered_candidates)} candidates matching {site_constraint}")
+        return filtered_candidates
+
+    def _search_category(self, query: str, category: str, engines: str, emoji: str,
+                         exclude_urls: set = None, max_results: int = None) -> list[SearchCandidate]:
+        """Helper method to search a specific category and return candidates."""
+        if exclude_urls is None:
+            exclude_urls = set()
+
+        search_url = f"{self.searxng_url}/search"
         params = {
             'q': query,
             'categories': category,
@@ -86,25 +138,31 @@ class SearchEngine:
         }
 
         try:
+            if max_results:
+                logger.info(f"{emoji} Searching {category} category for {query} (need {max_results} more)")
+            else:
+                logger.info(f"{emoji} Searching {category} category for {query}")
+
             response = self.session.get(search_url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
 
             candidates = []
-            for result in data.get('results', [])[:max_candidates]:
-                if result.get('url'):
+            for result in data.get('results', []):
+                if result.get('url') and result['url'] not in exclude_urls:
                     candidates.append(SearchCandidate(
                         url=result['url'],
                         title=result.get('title', 'Unknown Title'),
                         description=result.get('content', ''),
                         engine=result.get('engine', 'unknown')
                     ))
+                    if max_results and len(candidates) >= max_results:
+                        break
 
-            logger.info(f"🎯 Found {len(candidates)} article candidates")
             return candidates
 
         except Exception as e:
-            logger.exception(f"❌ Article search failed for '{query}': {e}")
+            logger.warning(f"⚠️ {category.title()} search failed for '{query}': {e}")
             return []
 
     def generate_search_queries(self, search_request: SearchRequest) -> list[str]:
@@ -166,7 +224,7 @@ class SearchEngine:
         except Exception:
             return "unknown"
 
-    def score_and_select_candidates(self, candidates: list[SearchCandidate],
+    def score_and_select_candidates(self, candidates: list[SearchCandidate | ImageSearchResult],
                                     search_request: SearchRequest,
                                     desired_count: int) -> list[SearchCandidate]:
         """Score candidates using AI and select the best ones (batch scoring with descriptions)."""
@@ -175,63 +233,77 @@ class SearchEngine:
 
         logger.info(f"🎯 Scoring {len(candidates)} candidates to select best {desired_count}")
 
-        # Prepare candidate descriptions for AI scoring
-        candidate_descriptions = [
-            f"{c.title} - {c.description[:100]}... ({c.url})"
-            for c in candidates
-        ]
+        # For large numbers of candidates, batch them to avoid AI response truncation
+        batch_size = 16  # Process candidates in batches of 30
+        scored_candidates = []
 
-        try:
-            prompt = prompts.get_candidate_scoring_prompt(candidate_descriptions, search_request)
+        for i in range(0, len(candidates), batch_size):
+            batch = candidates[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            total_batches = (len(candidates) + batch_size - 1) // batch_size
 
-            response = self.client.chat.completions.create(
-                model="anthropic/claude-3-sonnet",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.1
-            )
+            logger.info(f"🔍 Scoring batch {batch_num}/{total_batches} ({len(batch)} candidates)")
 
-            scores = json.loads(response.choices[0].message.content.strip())
+            # Prepare candidate descriptions for AI scoring
+            candidate_descriptions = [
+                f"{c.title} - {c.description[:100]}... ({c.url})"
+                for c in batch
+            ]
 
-            # Assign scores to candidates
-            for i, candidate in enumerate(candidates):
-                if i < len(scores):
-                    candidate.score = scores[i]
-                else:
-                    candidate.score = 0.0
+            try:
+                prompt = prompts.get_article_scoring_prompt(candidate_descriptions, search_request)
 
-            # Sort by score and return top candidates
-            top_candidates = sorted(candidates, key=lambda x: x.score, reverse=True)[:desired_count]
+                response = self.client.chat.completions.create(
+                    model="anthropic/claude-3-sonnet",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=500,  # Increased for larger batches
+                    temperature=0.1
+                )
 
-            logger.info(
-                f"✅ Selected {len(top_candidates)} top candidates "
-                f"(scores: {[f'{c.score:.2f}' for c in top_candidates]})"
-            )
-            return top_candidates
+                response_content = response.choices[0].message.content.strip()
+                logger.debug(f"🤖 Raw scoring response: {response_content[:200]}...")
 
-        except Exception as e:
-            logger.exception(f"❌ Candidate scoring failed: {e}")
-            # Fallback: return first N candidates
-            return candidates[:desired_count]
+                scores = json.loads(response_content)
 
-    def score_candidate(self, candidate, content_type: str, search_request,
-                        temp_dir: Path) -> float:
-        """Score a single candidate (image or article) based on actual content."""
-        try:
-            if content_type == "images":
-                return self._score_single_image(candidate, search_request.subject)
-            else:
-                return self._score_single_article(candidate, search_request, temp_dir)
-        except Exception as e:
-            logger.warning(f"⚠️ Scoring failed: {e}")
-            return 0.0
+                # Assign scores to candidates in this batch
+                for j, candidate in enumerate(batch):
+                    if j < len(scores):
+                        candidate.score = scores[j]
+                    else:
+                        candidate.score = 0.0
 
-    def _score_single_image(self, candidate, subject: str) -> float:
+                scored_candidates.extend(batch)
+
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ JSON parsing failed for batch {batch_num}: {e}")
+                logger.error(f"🔧 Raw response was: {response.choices[0].message.content}")
+                # Assign default scores to this batch
+                for candidate in batch:
+                    candidate.score = 0.5  # Neutral score
+                scored_candidates.extend(batch)
+
+            except Exception as e:
+                logger.exception(f"❌ Batch {batch_num} scoring failed: {e}")
+                # Assign default scores to this batch
+                for candidate in batch:
+                    candidate.score = 0.5  # Neutral score
+                scored_candidates.extend(batch)
+
+        # Sort by score and return top candidates
+        top_candidates = sorted(scored_candidates, key=lambda x: x.score, reverse=True)[:desired_count]
+
+        logger.info(
+            f"✅ Selected {len(top_candidates)} top candidates "
+            f"(scores: {[f'{c.score:.2f}' for c in top_candidates]})"
+        )
+        return top_candidates
+
+    def _score_single_image(self, download_result: DownloadResult, subject: str) -> float:
         """Score single image with vision API (resized to 480p max)."""
 
         try:
             # Download image
-            response = requests.get(str(candidate.url), timeout=10, headers={
+            response = requests.get(str(download_result.url), timeout=10, headers={
                 'User-Agent': 'Mozilla/5.0 (compatible; SearchBot/1.0)'
             })
             response.raise_for_status()
@@ -270,28 +342,26 @@ class SearchEngine:
             logger.warning(f"⚠️ Image scoring failed: {e}")
             return 0.0
 
-    def _score_single_article(self, candidate, search_request, temp_dir: Path) -> float:
+    def _score_single_article(self, download_result: DownloadResult, search_request: SearchRequest) -> float:
         """Score single article by downloading and extracting text."""
-
         try:
             # Download webpage
-            downloader = FileDownloader(temp_dir)
             extractor = ContentExtractor(self.client)
-
-            download_result = downloader.download_webpage(candidate, temp_dir)
-            if download_result.status != "success":
-                return 0.0
 
             # Extract actual text content
             html_content = download_result.filepath.read_text(encoding='utf-8')
             extracted_text = extractor.extract_article_text(html_content)
 
-            if not extracted_text or len(extracted_text.strip()) < 100:
-                return 0.1
+            if not extracted_text or len(extracted_text.strip()) < 200:
+                logger.warning(f"❌ Poor content extraction from {download_result.title[:50]}... (JS-heavy site?)")
+                return 0.0
+
+            # Save extracted text if we have a target filepath
+            extractor.save_extracted_text(extracted_text, download_result.filepath)
 
             # Score based on extracted text using existing prompts
-            candidate_descriptions = [f"{candidate.title} - {extracted_text[:300]}... ({candidate.url})"]
-            prompt = prompts.get_candidate_scoring_prompt(candidate_descriptions, search_request)
+            candidate_descriptions = [f"{download_result.title} - {extracted_text[:300]}... ({download_result.url})"]
+            prompt = prompts.get_article_scoring_prompt(candidate_descriptions, search_request)
 
             response = self.client.chat.completions.create(
                 model="anthropic/claude-3-sonnet",

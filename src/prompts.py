@@ -48,30 +48,32 @@ def get_search_queries_prompt(subject: str, count: int) -> str:
 
 def get_content_queries_prompt(topic: str, source: str, content_type: str, count: int) -> str:
     """Prompt for generating content search queries."""
-    if topic == "random":
-        return f"""Generate {min(count, 3)} diverse topics to find interesting {content_type}.
+    return f"""Generate {min(count, 3)} search queries to find {content_type}.
 
-        Generate completely different subjects that would have good {content_type}.
-        DO NOT use the word "random" in any query.
+    Topic: {topic}
+    Source: {source}
 
-        Examples of good topics: history, science, technology, nature, culture, biography
+    Instructions:
+    - If topic is "random": generate diverse interesting topics (history, science, culture, etc.)
+    - If topic is specific: use that topic for all queries
+    - If source is "any": DO NOT add any site: constraints
+    - If source is specific website: add "site:{source}" to EVERY query
+    - Never use the word "random" in queries
+    - Make queries varied and effective for finding good {content_type}
 
-        If source is specified, add "site:{source}" to each query.
-        Source: {source if source != "any" else "not specified"}
+    Examples:
+    - Topic "random", Source "any" → ["history", "science discoveries", "cultural traditions"]
+    - Topic "random", Source "wikipedia.org" → ["history site:wikipedia.org", "science site:wikipedia.org"]
+    - Topic "AI", Source "any" → ["artificial intelligence", "AI technology", "machine learning"]
+    - Topic "AI", Source "cnn.com" → ["AI site:cnn.com", "artificial intelligence site:cnn.com"]
 
-        Return EXACTLY a JSON array like: ["topic1", "topic2", "topic{count}"]
-        Return ONLY the JSON array."""
-    else:
-        return f"""Generate {min(count, 3)} search queries to find {content_type} about: {topic}
+    Return EXACTLY a JSON array of {min(count, 3)} search queries:
+    ["query1", "query2", "query3"]
 
-        If source is specified, add "site:{source}" to each query.
-        Source: {source if source != "any" else "not specified"}
-
-        Return EXACTLY a JSON array like: ["query1", "query2", "query{count}"]
-        Return ONLY the JSON array."""
+    Return ONLY the JSON array."""
 
 
-def get_candidate_scoring_prompt(candidates: list[str], search_request: SearchRequest) -> str:
+def get_article_scoring_prompt(candidates: list[str], search_request: SearchRequest) -> str:
     """Prompt for scoring search candidates."""
     candidates_text = "\n".join([
         f"{i+1}. {candidate}" for i, candidate in enumerate(candidates)

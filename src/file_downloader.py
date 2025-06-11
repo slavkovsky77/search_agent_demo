@@ -78,15 +78,7 @@ class FileDownloader:
 
         except Exception as e:
             logger.error(f"❌ Image download failed {image_result.url}: {e}")
-            return DownloadResult(
-                url=image_result.url,
-                filename="failed_download",
-                filepath=Path("failed"),
-                size_bytes=0,
-                status="failed",
-                error_message=str(e),
-                is_valid_image=False
-            )
+            None
 
     def download_webpage(self, candidate: SearchCandidate, directory: Path) -> DownloadResult:
         """Download a webpage/article."""
@@ -116,15 +108,7 @@ class FileDownloader:
 
         except Exception as e:
             logger.error(f"❌ Webpage download failed {candidate.url}: {e}")
-            return DownloadResult(
-                url=candidate.url,
-                filename="failed_download",
-                filepath=Path("failed"),
-                size_bytes=0,
-                status="failed",
-                error_message=str(e),
-                title=candidate.title
-            )
+            return None
 
     def _validate_image_content(self, content: bytes) -> dict:
         """Validate that content is actually a valid image using PIL."""
