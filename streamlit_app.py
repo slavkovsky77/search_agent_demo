@@ -4,6 +4,7 @@ Streamlit Web GUI for the Internet Search Agent
 """
 import streamlit as st
 import os
+import logging
 from pathlib import Path
 from typing import List
 
@@ -44,6 +45,7 @@ def initialize_agent():
             st.error(f"❌ Failed to initialize agent: {e}")
             st.stop()
 
+
 def render_sidebar():
     """Render the sidebar with example requests"""
     st.sidebar.title("🔍 AI Search Agent")
@@ -83,9 +85,19 @@ def render_sidebar():
     _, searxng_url = load_environment()
     st.sidebar.text(f"SearXNG URL: {searxng_url}")
 
+    # Log level selector
+    log_level = st.sidebar.selectbox(
+        "📊 Log Level",
+        options=["INFO", "DEBUG", "WARNING", "ERROR"],
+        index=0,
+        help="Select the minimum log level to display"
+    )
+    st.session_state.log_level = getattr(logging, log_level)
+
     if st.sidebar.button("🗂️ Open Downloads Folder"):
         downloads_path = Path("downloads").absolute()
         st.sidebar.text(f"Downloads: {downloads_path}")
+
 
 def render_results(results: List[DownloadResult]):
     """Render the download results"""
@@ -112,7 +124,7 @@ def render_results(results: List[DownloadResult]):
             with col:
                 try:
                     # Display image
-                    st.image(str(result.filepath), caption=result.title or result.filename, use_column_width=True)
+                    st.image(str(result.filepath), caption=result.title or result.filename, use_container_width=True)
 
                     # Image details
                     with st.expander(f"📋 Details - {result.filename}"):
@@ -154,7 +166,14 @@ def render_results(results: List[DownloadResult]):
                     # Show extracted text preview
                     if result.extracted_text:
                         st.write("**Content Preview:**")
-                        preview = result.extracted_text[:500] + "..." if len(result.extracted_text) > 500 else result.extracted_text
+                        preview = (
+                            result.extracted_text[:500] + "..."
+                            if len(result.extracted_text) > 500
+                            else result.extracted_text
+                        )
+                        preview = (
+                            preview[:500] + "..." if len(preview) > 500 else preview
+                        )
                         st.text_area("", preview, height=100, key=f"preview_{idx}", disabled=True)
 
                 with col2:
@@ -176,6 +195,7 @@ def render_results(results: List[DownloadResult]):
                             )
                     except Exception as e:
                         st.error(f"Error reading file: {e}")
+
 
 def main():
     """Main Streamlit app"""
@@ -209,25 +229,73 @@ def main():
 
     if clear_button:
         st.session_state.search_query = ''
+        if 'last_results' in st.session_state:
+            del st.session_state.last_results
+        if 'last_query' in st.session_state:
+            del st.session_state.last_query
         st.rerun()
 
     # Process search
     if search_button and search_query.strip():
         st.session_state.search_query = search_query
 
-        with st.spinner("🤖 AI is understanding your request..."):
-            try:
-                # Execute the search
-                results = st.session_state.agent.execute_request(search_query)
+        # Create containers for logs and progress
+        progress_container = st.container()
+        log_container = st.expander("📋 Real-time Logs", expanded=True)
 
-                # Store results in session state
-                st.session_state.last_results = results
-                st.session_state.last_query = search_query
+        with progress_container:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-            except Exception as e:
-                st.error(f"❌ Search failed: {e}")
-                st.exception(e)
-                return
+        with log_container:
+            log_placeholder = st.empty()
+
+        # Initialize log capture
+        logs = []
+
+        class StreamlitLogHandler(logging.Handler):
+            def emit(self, record):
+                log_entry = self.format(record)
+                logs.append(log_entry)
+                # Update logs in real-time (limit to last 50 entries)
+                recent_logs = logs[-50:] if len(logs) > 50 else logs
+                log_placeholder.text("\n".join(recent_logs))
+
+        # Set up logging
+        streamlit_handler = StreamlitLogHandler()
+        log_level = getattr(st.session_state, 'log_level', logging.INFO)
+        streamlit_handler.setLevel(log_level)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        streamlit_handler.setFormatter(formatter)
+
+        # Get the agent's logger and add our handler
+        agent_logger = logging.getLogger('src.agent_search_v2')
+        agent_logger.addHandler(streamlit_handler)
+        agent_logger.setLevel(logging.INFO)
+
+        try:
+            status_text.text("🤖 AI is understanding your request...")
+            progress_bar.progress(0.1)
+
+            # Execute the search
+            results = st.session_state.agent.execute_request(search_query)
+
+            progress_bar.progress(1.0)
+            status_text.text("✅ Search completed!")
+
+            # Store results in session state
+            st.session_state.last_results = results
+            st.session_state.last_query = search_query
+
+        except Exception as e:
+            progress_bar.progress(1.0)
+            status_text.text("❌ Search failed!")
+            st.error(f"❌ Search failed: {e}")
+            st.exception(e)
+            return
+        finally:
+            # Clean up logger
+            agent_logger.removeHandler(streamlit_handler)
 
     # Display results if they exist
     if hasattr(st.session_state, 'last_results') and st.session_state.last_results:

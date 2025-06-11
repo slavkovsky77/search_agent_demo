@@ -1,4 +1,24 @@
 services:
+  # Streamlit Web GUI service
+  streamlit:
+    build: .
+    container_name: rapid-sos-search-streamlit
+    ports:
+      - "8544:8544"
+    volumes:
+      - .:/app
+      - ./downloads:/app/downloads
+    environment:
+      - PYTHONPATH=/app/src:/app
+      - SEARXNG_URL=http://searxng:8080
+    env_file:
+      - .env
+    depends_on:
+      - searxng
+      - redis
+    command: streamlit run streamlit_app.py --server.port=8544 --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false
+    restart: unless-stopped
+
   # Test service
   tests:
     build: .

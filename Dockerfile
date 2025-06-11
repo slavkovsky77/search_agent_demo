@@ -21,6 +21,7 @@ RUN pip install pytest pytest-asyncio
 # Copy the source code
 COPY src/ src/
 COPY tests/ tests/
+COPY streamlit_app.py .
 COPY pytest.ini .
 
 # Set PYTHONPATH
