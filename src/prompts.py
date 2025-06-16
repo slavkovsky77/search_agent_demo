@@ -123,3 +123,16 @@ def get_image_scoring_prompt(subject: str) -> str:
 
     Return ONLY a JSON with a score 0.0-1.0:
     {{"score": 0.85, "reason": "clear photo of {subject}"}}"""
+
+
+def get_content_analysis_prompt(content: str, question: str) -> str:
+    """Prompt for analyzing downloaded content with a custom question."""
+    return f"""Analyze this content and answer the following question:
+
+Question: {question}
+
+Content:
+{content}
+
+Provide a clear, concise answer based on the content above. Focus on directly answering the question.
+Return ONLY the answer text, no JSON or additional formatting."""

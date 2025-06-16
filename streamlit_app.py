@@ -11,6 +11,8 @@ from typing import List
 # Import the agent
 from src.agent_search_v2 import InternetSearchAgent
 from src.models import DownloadResult
+from src.prompts import get_content_analysis_prompt
+from src.config import LLMModels
 
 # Page config
 st.set_page_config(
@@ -197,9 +199,90 @@ def render_results(results: List[DownloadResult]):
                         st.error(f"Error reading file: {e}")
 
 
+def analyze_content(content: str, question: str, client) -> str:
+    """Analyze content using AI."""
+    try:
+        prompt = get_content_analysis_prompt(content, question)
+        response = client.chat.completions.create(
+            model=LLMModels.CONTENT_SCORING,  # Using existing model for analysis
+            messages=[{"role": "user", "content": prompt}],
+            **LLMModels.SCORING_PARAMS
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Error analyzing content: {str(e)}"
+
+
+def render_analysis_section():
+    """Render the content analysis section."""
+    st.markdown("---")
+    st.subheader("🔍 Analyze Downloaded Content")
+
+    # Get all downloaded content
+    downloads_path = Path("downloads")
+    if not downloads_path.exists():
+        st.warning("No downloaded content found. Please download some content first.")
+        return
+
+    # Find all downloaded files
+    downloaded_files = []
+    for file_type in ["articles", "images"]:
+        type_path = downloads_path / file_type
+        if type_path.exists():
+            for item in type_path.glob("**/*"):
+                if item.is_file() and item.suffix in [".txt", ".html", ".jpg", ".png", ".jpeg"]:
+                    downloaded_files.append(item)
+
+    if not downloaded_files:
+        st.warning("No downloaded content found. Please download some content first.")
+        return
+
+    # Create file selector
+    selected_file = st.selectbox(
+        "Select content to analyze",
+        options=downloaded_files,
+        format_func=lambda x: f"{x.parent.name}/{x.name}"
+    )
+
+    if selected_file:
+        # Read content based on file type
+        try:
+            if selected_file.suffix in [".jpg", ".png", ".jpeg"]:
+                # For images, we'll just show the image
+                st.image(str(selected_file), caption=selected_file.name)
+                content = f"Image file: {selected_file.name}"
+            else:
+                # For text files, read the content
+                content = selected_file.read_text(encoding='utf-8')
+                with st.expander("View Content"):
+                    st.text_area("", content, height=200, disabled=True)
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+            return
+
+        # Question input
+        question = st.text_input(
+            "What would you like to know about this content?",
+            placeholder="e.g., 'What are the main points?' or 'Describe what you see in this image'"
+        )
+
+        # Analyze button
+        if st.button("🔍 Analyze", type="primary"):
+            if not question.strip():
+                st.warning("Please enter a question to analyze the content.")
+                return
+
+            with st.spinner("Analyzing content..."):
+                try:
+                    answer = analyze_content(content, question, st.session_state.agent.client)
+                    st.markdown("### Analysis Result")
+                    st.write(answer)
+                except Exception as e:
+                    st.error(f"Error during analysis: {e}")
+
+
 def main():
     """Main Streamlit app"""
-
     # Initialize agent
     initialize_agent()
 
@@ -302,6 +385,9 @@ def main():
         st.markdown("---")
         st.subheader(f"📊 Results for: '{st.session_state.last_query}'")
         render_results(st.session_state.last_results)
+
+    # Add analysis section
+    render_analysis_section()
 
     # Footer
     st.markdown("---")
