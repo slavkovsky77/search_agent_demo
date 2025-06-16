@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Streamlit Web GUI for the Internet Search Agent v3 (Function Calling)
+Streamlit Web GUI for the Internet Search Agent (Function Calling)
 """
 import streamlit as st
 import os
@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import List
 
 # Import the new function calling agent
-from src.agent_search import InternetSearchAgentV3
+from src.agent_search import InternetSearchAgent
 from src.models import DownloadResult
 from src.prompts import get_content_analysis_prompt
 from src.config import LLMModels
 
 # Page config
 st.set_page_config(
-    page_title="AI Internet Search Agent v3 - Function Calling",
+    page_title="AI Internet Search Agent - Function Calling",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -33,7 +33,7 @@ def load_environment():
 
 def initialize_agent():
     """Initialize the search agent"""
-    if 'agent_v3' not in st.session_state:
+    if 'agent' not in st.session_state:
         openrouter_key, searxng_url = load_environment()
 
         if not openrouter_key:
@@ -41,8 +41,8 @@ def initialize_agent():
             st.stop()
 
         try:
-            st.session_state.agent_v3 = InternetSearchAgentV3(openrouter_key, searxng_url)
-            st.success("✅ Function Calling Agent v3 initialized successfully!")
+            st.session_state.agent = InternetSearchAgent(openrouter_key, searxng_url)
+            st.success("✅ Function Calling Agent initialized successfully!")
         except Exception as e:
             st.error(f"❌ Failed to initialize agent: {e}")
             st.stop()
@@ -50,7 +50,7 @@ def initialize_agent():
 
 def render_sidebar():
     """Render the sidebar with example requests"""
-    st.sidebar.title("🔍 AI Search Agent v3")
+    st.sidebar.title("🔍 AI Search Agent")
     st.sidebar.markdown("**Function Calling Edition**")
     st.sidebar.markdown("---")
 
@@ -287,7 +287,7 @@ def render_analysis_section():
 
             with st.spinner("Analyzing content..."):
                 try:
-                    answer = analyze_content(content, question, st.session_state.agent_v3.client)
+                    answer = analyze_content(content, question, st.session_state.agent.client)
                     st.markdown("### Analysis Result")
                     st.write(answer)
                 except Exception as e:
@@ -303,7 +303,7 @@ def main():
     render_sidebar()
 
     # Main content
-    st.title("🔍 AI Internet Search Agent v3")
+    st.title("🔍 AI Internet Search Agent")
     st.markdown("**Function Calling Edition** - More reliable request understanding with structured tool calls")
 
     # Search input
@@ -325,10 +325,10 @@ def main():
 
     if clear_button:
         st.session_state.search_query = ''
-        if 'last_results_v3' in st.session_state:
-            del st.session_state.last_results_v3
-        if 'last_query_v3' in st.session_state:
-            del st.session_state.last_query_v3
+        if 'last_results' in st.session_state:
+            del st.session_state.last_results
+        if 'last_query' in st.session_state:
+            del st.session_state.last_query
         st.rerun()
 
     # Process search
@@ -383,14 +383,14 @@ def main():
             progress_bar.progress(0.1)
 
             # Execute the search with function calling
-            results = st.session_state.agent_v3.execute_request(search_query)
+            results = st.session_state.agent.execute_request(search_query)
 
             progress_bar.progress(1.0)
             status_text.text("✅ Function calling search completed!")
 
             # Store results in session state
-            st.session_state.last_results_v3 = results
-            st.session_state.last_query_v3 = search_query
+            st.session_state.last_results = results
+            st.session_state.last_query = search_query
 
         except Exception as e:
             progress_bar.progress(1.0)
@@ -402,10 +402,10 @@ def main():
             pass
 
     # Display results if they exist
-    if hasattr(st.session_state, 'last_results_v3') and st.session_state.last_results_v3:
+    if hasattr(st.session_state, 'last_results') and st.session_state.last_results:
         st.markdown("---")
-        st.subheader(f"📊 Results for: '{st.session_state.last_query_v3}'")
-        render_results(st.session_state.last_results_v3)
+        st.subheader(f"📊 Results for: '{st.session_state.last_query}'")
+        render_results(st.session_state.last_results)
 
     # Add analysis section
     render_analysis_section()
@@ -415,7 +415,7 @@ def main():
     st.markdown("""
     <div style='text-align: center; color: #666;'>
         <p>🤖 Powered by Function Calling AI • 🔍 SearXNG Search • 📁 Local Storage</p>
-        <p><strong>v3.0 - Function Calling Edition</strong></p>
+        <p><strong>Function Calling Edition</strong></p>
     </div>
     """, unsafe_allow_html=True)
 

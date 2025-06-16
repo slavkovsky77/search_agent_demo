@@ -21,9 +21,9 @@ from .config import setup_logging, LLMModels, SystemConstants
 logger = setup_logging(__name__)
 
 
-class InternetSearchAgentV3:
+class InternetSearchAgent:
     """
-    Function calling version of the Internet Search Agent.
+    AI agent for autonomous internet search and downloads using OpenAI function calling.
     Uses OpenAI's function calling instead of JSON parsing for better reliability.
     """
 
@@ -34,7 +34,7 @@ class InternetSearchAgentV3:
             api_key=openrouter_api_key,
             default_headers={
                 "HTTP-Referer": "https://github.com/rapid-sos-search",
-                "X-Title": "Internet Search Agent v3 (Function Calling)"
+                "X-Title": "Internet Search Agent (Function Calling)"
             }
         )
 
@@ -47,7 +47,7 @@ class InternetSearchAgentV3:
         # Get tool definitions from agent_tools module
         self.tools = get_search_tools()
 
-        logger.info("🚀 InternetSearchAgent v3 (Function Calling) ready")
+        logger.info("🚀 InternetSearchAgent (Function Calling) ready")
 
     def execute_request(self, user_request: str) -> List[DownloadResult]:
         """

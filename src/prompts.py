@@ -12,7 +12,8 @@ def get_search_queries_prompt(subject: str, count: int) -> str:
     return f"""Generate {max_queries} different search queries to find images of: {subject}
 
     Return EXACTLY a JSON array like: ["query1", "query2", "query{max_queries}"]
-    Each query should be {QueryLimits.IMAGE_QUERY_WORDS_MIN}-{QueryLimits.IMAGE_QUERY_WORDS_MAX} words, designed to find {subject}.
+    Each query should be {QueryLimits.IMAGE_QUERY_WORDS_MIN}-{QueryLimits.IMAGE_QUERY_WORDS_MAX} words,
+    designed to find {subject}.
     Return ONLY the JSON array."""
 
 
