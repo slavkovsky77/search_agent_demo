@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Streamlit Web GUI for the Internet Search Agent
+Streamlit Web GUI for the Internet Search Agent v3 (Function Calling)
 """
 import streamlit as st
 import os
@@ -8,15 +8,15 @@ import logging
 from pathlib import Path
 from typing import List
 
-# Import the agent
-from src.agent_search_v2 import InternetSearchAgent
+# Import the new function calling agent
+from src.agent_search import InternetSearchAgentV3
 from src.models import DownloadResult
 from src.prompts import get_content_analysis_prompt
 from src.config import LLMModels
 
 # Page config
 st.set_page_config(
-    page_title="AI Internet Search Agent",
+    page_title="AI Internet Search Agent v3 - Function Calling",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -33,7 +33,7 @@ def load_environment():
 
 def initialize_agent():
     """Initialize the search agent"""
-    if 'agent' not in st.session_state:
+    if 'agent_v3' not in st.session_state:
         openrouter_key, searxng_url = load_environment()
 
         if not openrouter_key:
@@ -41,8 +41,8 @@ def initialize_agent():
             st.stop()
 
         try:
-            st.session_state.agent = InternetSearchAgent(openrouter_key, searxng_url)
-            st.success("✅ Agent initialized successfully!")
+            st.session_state.agent_v3 = InternetSearchAgentV3(openrouter_key, searxng_url)
+            st.success("✅ Function Calling Agent v3 initialized successfully!")
         except Exception as e:
             st.error(f"❌ Failed to initialize agent: {e}")
             st.stop()
@@ -50,7 +50,8 @@ def initialize_agent():
 
 def render_sidebar():
     """Render the sidebar with example requests"""
-    st.sidebar.title("🔍 AI Search Agent")
+    st.sidebar.title("🔍 AI Search Agent v3")
+    st.sidebar.markdown("**Function Calling Edition**")
     st.sidebar.markdown("---")
 
     st.sidebar.subheader("📝 Example Requests")
@@ -62,7 +63,9 @@ def render_sidebar():
         "Download 2 articles about artificial intelligence",
         "Download the front page of https://news.ycombinator.com/",
         "Download 3 articles about space from nasa.gov",
-        "Find 2 photos of elephants"
+        "Find 2 photos of elephants",
+        "Get 4 articles about climate change from any source",
+        "Download 1 article about machine learning from arxiv.org"
     ]
 
     for example in examples:
@@ -71,13 +74,23 @@ def render_sidebar():
             st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("ℹ️ How it works")
+    st.sidebar.subheader("ℹ️ How Function Calling Works")
     st.sidebar.markdown("""
-    1. **Enter your request** in natural language
-    2. **AI understands** what you want to find
-    3. **Searches** using SearXNG locally
-    4. **Downloads** and validates content
-    5. **Scores** results for relevance
+    1. **AI understands** your natural language request
+    2. **Chooses tools** automatically (search_images, download_articles, etc.)
+    3. **Validates parameters** with structured schemas
+    4. **Executes functions** with proper error handling
+    5. **Returns results** reliably without JSON parsing errors
+    """)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🆚 Improvements over v2")
+    st.sidebar.markdown("""
+    - ✅ **No JSON parsing errors**
+    - ✅ **Schema validation**
+    - ✅ **Better error handling**
+    - ✅ **More reliable parameter extraction**
+    - ✅ **Tool orchestration**
     """)
 
     st.sidebar.markdown("---")
@@ -107,7 +120,7 @@ def render_results(results: List[DownloadResult]):
         st.warning("No results found. Try a different search query.")
         return
 
-    st.success(f"✅ Downloaded {len(results)} items successfully!")
+    st.success(f"✅ Downloaded {len(results)} items successfully with Function Calling!")
 
     # Group results by content type
     images = [r for r in results if r.mime_type and r.mime_type.startswith('image/')]
@@ -274,7 +287,7 @@ def render_analysis_section():
 
             with st.spinner("Analyzing content..."):
                 try:
-                    answer = analyze_content(content, question, st.session_state.agent.client)
+                    answer = analyze_content(content, question, st.session_state.agent_v3.client)
                     st.markdown("### Analysis Result")
                     st.write(answer)
                 except Exception as e:
@@ -290,8 +303,8 @@ def main():
     render_sidebar()
 
     # Main content
-    st.title("🔍 AI Internet Search Agent")
-    st.markdown("Enter a natural language request to search and download content from the internet.")
+    st.title("🔍 AI Internet Search Agent v3")
+    st.markdown("**Function Calling Edition** - More reliable request understanding with structured tool calls")
 
     # Search input
     search_query = st.text_input(
@@ -312,10 +325,10 @@ def main():
 
     if clear_button:
         st.session_state.search_query = ''
-        if 'last_results' in st.session_state:
-            del st.session_state.last_results
-        if 'last_query' in st.session_state:
-            del st.session_state.last_query
+        if 'last_results_v3' in st.session_state:
+            del st.session_state.last_results_v3
+        if 'last_query_v3' in st.session_state:
+            del st.session_state.last_query_v3
         st.rerun()
 
     # Process search
@@ -351,24 +364,33 @@ def main():
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         streamlit_handler.setFormatter(formatter)
 
-        # Get the agent's logger and add our handler
-        agent_logger = logging.getLogger('src.agent_search_v2')
-        agent_logger.addHandler(streamlit_handler)
-        agent_logger.setLevel(logging.INFO)
+        # Define logger names for cleanup
+        logger_names = [
+            'src.agent_search',
+            'src.search_engine',
+            'src.file_downloader',
+            'src.content_extractor'
+        ]
+
+        # Get all relevant loggers and add our handler
+        for logger_name in logger_names:
+            logger = logging.getLogger(logger_name)
+            logger.addHandler(streamlit_handler)
+            logger.setLevel(logging.INFO)
 
         try:
-            status_text.text("🤖 AI is understanding your request...")
+            status_text.text("🤖 AI is understanding your request with function calling...")
             progress_bar.progress(0.1)
 
-            # Execute the search
-            results = st.session_state.agent.execute_request(search_query)
+            # Execute the search with function calling
+            results = st.session_state.agent_v3.execute_request(search_query)
 
             progress_bar.progress(1.0)
-            status_text.text("✅ Search completed!")
+            status_text.text("✅ Function calling search completed!")
 
             # Store results in session state
-            st.session_state.last_results = results
-            st.session_state.last_query = search_query
+            st.session_state.last_results_v3 = results
+            st.session_state.last_query_v3 = search_query
 
         except Exception as e:
             progress_bar.progress(1.0)
@@ -377,14 +399,13 @@ def main():
             st.exception(e)
             return
         finally:
-            # Clean up logger
-            agent_logger.removeHandler(streamlit_handler)
+            pass
 
     # Display results if they exist
-    if hasattr(st.session_state, 'last_results') and st.session_state.last_results:
+    if hasattr(st.session_state, 'last_results_v3') and st.session_state.last_results_v3:
         st.markdown("---")
-        st.subheader(f"📊 Results for: '{st.session_state.last_query}'")
-        render_results(st.session_state.last_results)
+        st.subheader(f"📊 Results for: '{st.session_state.last_query_v3}'")
+        render_results(st.session_state.last_results_v3)
 
     # Add analysis section
     render_analysis_section()
@@ -393,7 +414,8 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>🤖 Powered by AI • 🔍 SearXNG Search • 📁 Local Storage</p>
+        <p>🤖 Powered by Function Calling AI • 🔍 SearXNG Search • 📁 Local Storage</p>
+        <p><strong>v3.0 - Function Calling Edition</strong></p>
     </div>
     """, unsafe_allow_html=True)
 

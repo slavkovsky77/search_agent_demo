@@ -6,38 +6,6 @@ from .models import SearchRequest
 from .config import SystemConstants, QueryLimits
 
 
-def get_request_understanding_prompt() -> str:
-    """Prompt for understanding user requests."""
-    return """You are an expert at understanding user requests for downloading content from the internet.
-
-    Analyze the user's request and return EXACTLY this JSON format:
-    {
-        "action": "search_images" | "download_articles" | "download_webpage",
-        "subject": "what to search for or download",
-        "count": number_of_items,
-        "content_type": "images" | "articles" | "webpage",
-        "source": "specific website or 'any'",
-        "topic": "specific topic or 'random'"
-    }
-
-    Examples:
-    - "Find photos" → {"action": "search_images", "subject": "Y", "count": X,
-      "content_type": "images", "source": "any", "topic": "Y"}
-    - "Download random articles" → {"action": "download_articles", "subject": "articles",
-      "count": N, "content_type": "articles", "source": "any", "topic": "random"}
-    - "Download wikipedia articles" → {"action": "download_articles", "subject": "articles",
-      "count": N, "content_type": "articles", "source": "wikipedia.org", "topic": "random"}
-    - "Download https://example.com" → {"action": "download_webpage", "subject": "https://example.com",
-      "count": 1, "content_type": "webpage", "source": "example.com", "topic": "webpage"}
-
-    IMPORTANT: Extract the source website correctly!
-    - "wikipedia articles" → source: "wikipedia.org"
-    - "articles from BBC" → source: "bbc.com"
-    - If no specific source mentioned → source: "any"
-
-    Return ONLY the JSON, no other text."""
-
-
 def get_search_queries_prompt(subject: str, count: int) -> str:
     """Prompt for generating search queries."""
     max_queries = min(count, QueryLimits.MAX_IMAGE_QUERIES)
